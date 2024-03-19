@@ -1,0 +1,67 @@
+###############
+# BUILD STAGE #
+###############
+
+# pull official base image
+FROM python:3.11.4-slim-buster as builder
+
+# set work directory
+WORKDIR /usr/src/app
+
+# set environment variables
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+
+# copy requirements and install system dependencies
+COPY ./requirements.txt .
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc && \
+    pip install --upgrade pip && \
+    pip wheel --no-cache-dir --no-deps --wheel-dir /usr/src/app/wheels -r requirements.txt && \
+    pip install flake8==6.0.0
+
+# copy project files and run linter
+COPY . .
+RUN flake8 --ignore=E501,F401 --exclude=./env/* .
+
+#################
+# RUNTIME STAGE #
+#################
+
+# pull official base image
+FROM python:3.11.4-slim-buster
+
+# set environment variables
+ENV APP_HOME=/home/app/web
+
+# create the app user and necessary directories
+RUN addgroup --system app && \
+    adduser --system --group app && \
+    mkdir -p $APP_HOME
+
+# set working directory
+WORKDIR $APP_HOME
+
+# install dependencies
+COPY --from=builder /usr/src/app/wheels /wheels
+COPY --from=builder /usr/src/app/requirements.txt .
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends netcat && \
+    pip install --upgrade pip && \
+    pip install --no-cache /wheels/* && \
+    rm -rf /wheels && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# copy entrypoint.prod.sh and project files
+COPY ./entrypoint.prod.sh .
+COPY . .
+
+# set permissions and switch to the app user
+RUN sed -i 's/\r$//g' entrypoint.prod.sh && \
+    chmod +x entrypoint.prod.sh && \
+    chown -R app:app .
+USER app
+
+# set entrypoint
+ENTRYPOINT ["/home/app/web/entrypoint.prod.sh"]
